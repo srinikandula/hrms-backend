@@ -6,7 +6,7 @@ userId: {
         ref: 'User',
         required: true
       },
-  title: {
+LeaveType: {
     type: String,
     required: true
   },

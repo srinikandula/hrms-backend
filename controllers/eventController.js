@@ -1,10 +1,11 @@
 const Event = require('../models/Event');
+const { ObjectId } = require('mongoose').Types;
 
 exports.createEvent = async (req, res) => {
-  const { title, start, end, description } = req.body;
+  const { LeaveType, start, end, description } = req.body;
   try {
     const newEvent = new Event({
-      title,
+        LeaveType,
       start,
       end,
       description,
@@ -30,25 +31,30 @@ exports.getEvents = async (req, res) => {
 };
 
 exports.updateEvent = async (req, res) => {
-  const { id } = req.params;
-  const { title, start, end, description } = req.body;
-  try {
-    const updatedEvent = await Event.findOneAndUpdate(
-      { _id: id, userId: req.user._id },  
-      { title, start, end, description },
-      { new: true }
-    );
-    if (!updatedEvent) {
-      return res.status(404).json({ message: 'Event not found or you do not have permission to update it' });
+    const { id } = req.params;
+    const { LeaveType, start, end, description } = req.body;
+  
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ message: 'Invalid event ID' });
     }
-    res.json({
-      message: 'Event updated successfully',
-      event: updatedEvent
-    });
-  } catch (err) {
-    res.status(400).json({ message: err.message });
-  }
-};
+  
+    try {
+      const updatedEvent = await Event.findOneAndUpdate(
+        { _id: id, userId: req.user._id },  
+        { LeaveType, start, end, description },
+        { new: true }
+      );
+      if (!updatedEvent) {
+        return res.status(404).json({ message: 'Event not found or you do not have permission to update it' });
+      }
+      res.json({
+        message: 'Event updated successfully',
+        event: updatedEvent
+      });
+    } catch (err) {
+      res.status(400).json({ message: err.message });
+    }
+  };
 
 exports.deleteEvent = async (req, res) => {
   const { id } = req.params;
