@@ -25,6 +25,8 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // Define allowed ports
 const allowedOrigins = [
     'http://localhost:3000',
+    'https://leaveapi.aultrapaints.com'
+
 ];
 
 
