@@ -14,4 +14,9 @@ router.put('/update/:id', ensureAuthenticated, eventController.updateEvent);
 
 router.delete('/delete/:id', ensureAuthenticated, eventController.deleteEvent);
 
+
+router.get('/manager/employee-leaves', ensureAuthenticated, eventController.getManagerMappedEmployeeLeaves);
+
+router.post('/manager/leave-action', ensureAuthenticated, eventController.approveRejectLeave);
+
 module.exports = router;
