@@ -1,27 +1,37 @@
 const Event = require('../models/Event');
 const { ObjectId } = require('mongoose').Types;
+const User = require('../models/User');
+const LeaveType = require('../models/LeaveType');
+
 
 exports.createEvent = async (req, res) => {
-    const { LeaveType, start, end, description, roleType, managerId } = req.body;
+    const { LeaveType, start, end, description, managerId } = req.body;
     try {
-      // Validate roleType
-      if (!['employee', 'manager'].includes(roleType)) {
-        return res.status(400).json({ message: 'Invalid roleType. Must be either "employee" or "manager".' });
+      const startDate = new Date(start);
+      const endDate = new Date(end);
+      const leaveDays = Math.ceil((endDate - startDate) / (1000 * 3600 * 24)) + 1;
+
+      // Find the user and populate their leave balances
+      const user = await User.findById(req.user._id).populate('leaveBalances.leaveType');
+
+      const leaveBalance = user.leaveBalances.find(balance => balance.leaveType.name === LeaveType);
+
+      // Check if the leave type exists and if the user has enough balance
+      if (!leaveBalance) {
+        return res.status(400).json({ message: `No leave balance found for ${LeaveType}` });
       }
-  
-      // If roleType is employee, managerId is required
-      if (roleType === 'employee' && !managerId) {
-        return res.status(400).json({ message: 'Manager ID is required for employee role type.' });
+
+      if (leaveBalance.count < leaveDays) {
+        return res.status(400).json({ message: `Insufficient leave balance for ${LeaveType}. Available: ${leaveBalance.count}, Requested: ${leaveDays}` });
       }
-  
+
       const newEvent = new Event({
         LeaveType,
         start,
         end,
         description,
         userId: req.user._id,
-        roleType,
-        managerId: roleType === 'employee' ? new ObjectId(managerId) : null,
+        managerId: managerId ? new ObjectId(managerId) : null,
         status: 'pending'
       });
   
@@ -33,7 +43,7 @@ exports.createEvent = async (req, res) => {
     } catch (err) {
       res.status(400).json({ message: err.message });
     }
-  };
+};
 
 exports.getEvents = async (req, res) => {
   try {
@@ -46,14 +56,13 @@ exports.getEvents = async (req, res) => {
 
 exports.updateEvent = async (req, res) => {
     const { id } = req.params;
-    const { LeaveType, start, end, description, roleType, managerId, status } = req.body;
+    const { LeaveType, start, end, description, managerId, status } = req.body;
   
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Invalid event ID' });
     }
   
     try {
-      // Fetch the existing event without checking the userId
       const existingEvent = await Event.findById(id);
   
       if (!existingEvent) {
@@ -65,28 +74,35 @@ exports.updateEvent = async (req, res) => {
         return res.status(400).json({ message: 'Cannot update an approved or rejected event' });
       }
   
-      // Validate roleType
-      if (roleType && !['employee', 'manager'].includes(roleType)) {
-        return res.status(400).json({ message: 'Invalid roleType. Must be either "employee" or "manager".' });
-      }
-  
-      // If roleType is employee, managerId is required
-      if (roleType === 'employee' && !managerId) {
-        return res.status(400).json({ message: 'Manager ID is required for employee role type.' });
-      }
-  
-      // Validate status
       if (status && !['pending', 'approved', 'rejected'].includes(status)) {
         return res.status(400).json({ message: 'Invalid status. Must be "pending", "approved", or "rejected".' });
       }
-  
+
+      // Calculate the new number of leave days
+      const startDate = start ? new Date(start) : existingEvent.start;
+      const endDate = end ? new Date(end) : existingEvent.end;
+      const newLeaveDays = Math.ceil((endDate - startDate) / (1000 * 3600 * 24)) + 1;
+
+      // Find the user and populate their leave balances
+      const user = await User.findById(existingEvent.userId).populate('leaveBalances.leaveType');
+
+      const leaveType = LeaveType || existingEvent.LeaveType;
+      const leaveBalance = user.leaveBalances.find(balance => balance.leaveType.name === leaveType);
+
+      if (!leaveBalance) {
+        return res.status(400).json({ message: `No leave balance found for ${leaveType}` });
+      }
+
+      if (leaveBalance.count < newLeaveDays) {
+        return res.status(400).json({ message: `Insufficient leave balance for ${leaveType}. Available: ${leaveBalance.count}, Requested: ${newLeaveDays}` });
+      }
+
       const updateData = {
-        LeaveType,
-        start,
-        end,
+        LeaveType: leaveType,
+        start: startDate,
+        end: endDate,
         description,
-        roleType,
-        managerId: roleType === 'employee' ? new ObjectId(managerId) : null,
+        managerId: managerId ? new ObjectId(managerId) : existingEvent.managerId,
         status: status || 'pending' 
       };
   
@@ -103,7 +119,7 @@ exports.updateEvent = async (req, res) => {
     } catch (err) {
       res.status(400).json({ message: err.message });
     }
-  };
+};
 
 exports.deleteEvent = async (req, res) => {
   const { id } = req.params;
@@ -140,39 +156,57 @@ exports.getManagerMappedEmployeeLeaves = async (req, res) => {
 
 
 exports.approveRejectLeave = async (req, res) => {
-    console.log('approveRejectLeave function called');
     try {
-        // Check if the logged-in user is a manager
-        if (req.user.role !== 'manager') {
-            return res.status(403).json({ message: 'Access denied. Only managers can approve or reject leaves.' });
+      const { leaveId, action } = req.body;
+  
+      const leave = await Event.findById(leaveId);
+      if (!leave) {
+        return res.status(404).json({ message: 'Leave request not found' });
+      }
+  
+      if (action === 'approve') {
+        leave.status = 'approved';
+        await leave.save();
+  
+        const startDate = new Date(leave.start);
+        const endDate = new Date(leave.end);
+        const leaveDays = Math.ceil((endDate - startDate) / (1000 * 3600 * 24)) + 1;
+  
+        const leaveType = await LeaveType.findOne({ name: leave.LeaveType });
+        if (!leaveType) {
+          return res.status(404).json({ message: 'Leave type not found' });
         }
-
-        const { leaveId, action } = req.body;
-
-        if (!['approve', 'reject'].includes(action)) {
-            return res.status(400).json({ message: 'Invalid action. Must be either "approve" or "reject".' });
+  
+        const updatedUser = await User.findOneAndUpdate(
+          { 
+            _id: leave.userId, 
+            'leaveBalances.leaveType': leaveType._id 
+          },
+          { $inc: { 'leaveBalances.$.count': -leaveDays } },
+          { new: true }
+        );
+  
+        if (!updatedUser) {
+          const user = await User.findById(leave.userId);
+          const leaveBalanceIndex = user.leaveBalances.findIndex(
+            balance => balance.leaveType.toString() === leaveType._id.toString()
+          );
+          if (leaveBalanceIndex !== -1) {
+            user.leaveBalances[leaveBalanceIndex].count -= leaveDays;
+            await user.save();
+          }
         }
-
-        // Find the leave request
-        const leave = await Event.findOne({ _id: leaveId, managerId: req.user._id });
-
-        if (!leave) {
-            return res.status(404).json({ message: 'Leave request not found or you do not have permission to modify it.' });
-        }
-
-        if (action === 'approve') {
-            // Update the leave status to approved
-            leave.status = 'approved';
-            await leave.save();
-
-            res.json({ message: 'Leave request approved successfully', leave });
-        } else if (action === 'reject') {
-            // Delete the leave request
-            await Event.deleteOne({ _id: leaveId });
-
-            res.json({ message: 'Leave request rejected and deleted successfully' });
-        }
+  
+        res.json({ message: 'Leave request approved successfully', leave });
+      } else if (action === 'reject') {
+        leave.status = 'rejected';
+        await leave.save();
+        res.json({ message: 'Leave request rejected successfully', leave });
+      } else {
+        res.status(400).json({ message: 'Invalid action' });
+      }
     } catch (error) {
-        res.status(500).json({ message: error.message });
+      res.status(500).json({ message: error.message });
     }
-};
+  };
+  

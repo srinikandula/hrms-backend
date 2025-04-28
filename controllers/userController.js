@@ -132,3 +132,41 @@ exports.getAllManagers = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+exports.getUserLeaveBalancesByUserId = async (req, res) => {
+    const { userId, leaveType } = req.body;  // userId and leaveType from request body
+    
+    try {
+        // Find the user by userId
+        const user = await User.findById(userId).populate('leaveBalances.leaveType');
+        
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        if (leaveType) {
+            // If leaveType is provided, filter the leave balance for that specific leave type
+            const specificLeaveBalance = user.leaveBalances.find(balance => balance.leaveType.name === leaveType);
+
+            if (!specificLeaveBalance) {
+                return res.status(404).json({ message: `No leave balance found for ${leaveType}` });
+            }
+
+            // Return the specific leave balance
+            return res.status(200).json({
+                leaveType: specificLeaveBalance.leaveType.name,
+                availableLeave: specificLeaveBalance.count
+            });
+        }
+
+        // If no leaveType is provided, return all leave balances
+        const leaveBalances = user.leaveBalances.map(balance => ({
+            name: balance.leaveType.name,
+            count: balance.count
+        }));
+
+        res.status(200).json(leaveBalances);
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching leave balances', error: error.message });
+    }
+};

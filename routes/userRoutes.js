@@ -21,4 +21,7 @@ router.post('/search', ensureAuthenticated, userController.searchUsers);
 
 router.get('/managers', ensureAuthenticated, userController.getAllManagers);
 
+router.post('/leave-balances', ensureAuthenticated, userController.getUserLeaveBalancesByUserId);
+
+
 module.exports = router;
