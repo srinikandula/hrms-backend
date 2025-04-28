@@ -21,11 +21,6 @@ LeaveType: {
   description: {
     type: String
   },
-  roleType: {
-    type: String,
-    enum: ['employee', 'manager'],
-    required: true
-  },
   managerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
