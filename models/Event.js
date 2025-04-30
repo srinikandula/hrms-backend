@@ -21,10 +21,6 @@ LeaveType: {
   description: {
     type: String
   },
-  managerId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
   status: {
     type: String,
     enum: ['pending', 'approved', 'rejected'],

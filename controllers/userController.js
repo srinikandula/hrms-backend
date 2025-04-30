@@ -1,6 +1,8 @@
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const LeaveType = require('../models/LeaveType');
+const mongoose = require('mongoose');
 
 // Get all users
 exports.getAllUsers = async (req, res) => {
@@ -14,68 +16,104 @@ exports.getAllUsers = async (req, res) => {
 
 // Create a new user
 exports.createUser = async (req, res) => {
-    const { fullName, mobile, password, role } = req.body;
+    const { fullName, mobile, password, role, manager } = req.body;
     try {
-        // Check if all required fields are present
-        if (!fullName || !mobile || !password) {
-            return res.status(400).json({ message: 'fullName, mobile, and password are required fields' });
-        }
-
-        // Check if role is valid
-        if (role && !['employee', 'manager'].includes(role)) {
-            return res.status(400).json({ message: 'Invalid role. Must be either "employee" or "manager".' });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-        
-        // Generate token
-        const token = jwt.sign(
-            { mobile: mobile },
-            process.env.JWT_SECRET,
-            { expiresIn: process.env.JWT_EXPIRES_IN }
-        );
-
-        const newUser = new User({ 
-            fullName, 
-            mobile, 
-            password: hashedPassword, 
-            role: role || 'employee',
-            token: token
-        });
-        const savedUser = await newUser.save();
-        
-        // Remove password from the response
-        const { password: _, ...userResponse } = savedUser.toObject();
-        res.status(201).json(userResponse);
+      if (!fullName || !mobile || !password) {
+        return res.status(400).json({ message: 'fullName, mobile, and password are required fields' });
+      }
+  
+      const hashedPassword = await bcrypt.hash(password, 10);
+  
+      const token = jwt.sign(
+        { mobile: mobile },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRES_IN }
+      );
+  
+      const newUser = new User({
+        fullName,
+        mobile,
+        password: hashedPassword,
+        role: role || 'employee',
+        token: token,
+        manager: manager || null
+      });
+  
+      const savedUser = await newUser.save();
+  
+      //  After saving user, fetch leave types
+      const leaveTypes = await LeaveType.find();
+  
+      //  Create leaveBalances for each leave type
+      const leaveBalances = leaveTypes.map(type => ({
+        leaveType: type._id,
+        count: type.count || 0 
+      }));
+  
+      //  Update user with leaveBalances
+      savedUser.leaveBalances = leaveBalances;
+      await savedUser.save(); 
+  
+      const { password: _, ...userResponse } = savedUser.toObject();
+      res.status(201).json(userResponse);
+  
     } catch (error) {
-        res.status(400).json({ message: error.message });
+      res.status(400).json({ message: error.message });
     }
-};
+  };
+  
+
 
 // Update a user
 exports.updateUser = async (req, res) => {
     const { id } = req.params;
-    const { fullName, mobile, role } = req.body;
+    const { fullName, mobile, manager } = req.body;
+  
     try {
-        // Check if role is valid
-        if (role && !['employee', 'manager'].includes(role)) {
-            return res.status(400).json({ message: 'Invalid role. Must be either "employee" or "manager".' });
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ message: 'Invalid user ID' });
+      }
+  
+      const updateFields = { fullName, mobile };
+      if (manager !== undefined) {
+        if (manager === '' || manager === null) {
+          updateFields.manager = null;
+        } else if (mongoose.Types.ObjectId.isValid(manager)) {
+          updateFields.manager = manager;
+        } else {
+          return res.status(400).json({ message: 'Invalid manager ID' });
         }
-
-        const updatedUser = await User.findByIdAndUpdate(
-            id,
-            { fullName, mobile, role },
-            { new: true, runValidators: true }
-        ).select('-password -token');
-
-        if (!updatedUser) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        res.status(200).json(updatedUser);
+      }
+  
+      let user = await User.findByIdAndUpdate(
+        id,
+        updateFields,
+        { new: true, runValidators: true }
+      ).select('-password -token');
+  
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+  
+      // Check if leaveBalances field is missing
+      if (user.leaveBalances === undefined) {
+        const leaveTypes = await LeaveType.find();
+        const leaveBalances = leaveTypes.map(type => ({
+          leaveType: type._id,
+          count: type.count || 0  
+        }));
+  
+        user.leaveBalances = leaveBalances;
+        await user.save(); 
+      }
+  
+      res.status(200).json(user);
+  
     } catch (error) {
-        res.status(400).json({ message: error.message });
+      console.error('Error updating user:', error);
+      res.status(400).json({ message: error.message });
     }
-};
+  };
 
 // Delete a user
 exports.deleteUser = async (req, res) => {
@@ -134,7 +172,7 @@ exports.getAllManagers = async (req, res) => {
 };
 
 exports.getUserLeaveBalancesByUserId = async (req, res) => {
-    const { userId, leaveType } = req.body;  // userId and leaveType from request body
+    const { userId, leaveType } = req.body;  
     
     try {
         // Find the user by userId
