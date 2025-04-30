@@ -5,7 +5,7 @@ const LeaveType = require('../models/LeaveType');
 
 
 exports.createEvent = async (req, res) => {
-    const { LeaveType, start, end, description, managerId } = req.body;
+    const { LeaveType, start, end, description } = req.body;  // No managerId here anymore
     try {
       const startDate = new Date(start);
       const endDate = new Date(end);
@@ -14,9 +14,12 @@ exports.createEvent = async (req, res) => {
       // Find the user and populate their leave balances
       const user = await User.findById(req.user._id).populate('leaveBalances.leaveType');
 
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+
       const leaveBalance = user.leaveBalances.find(balance => balance.leaveType.name === LeaveType);
 
-      // Check if the leave type exists and if the user has enough balance
       if (!leaveBalance) {
         return res.status(400).json({ message: `No leave balance found for ${LeaveType}` });
       }
@@ -31,7 +34,6 @@ exports.createEvent = async (req, res) => {
         end,
         description,
         userId: req.user._id,
-        managerId: managerId ? new ObjectId(managerId) : null,
         status: 'pending'
       });
   
@@ -45,6 +47,7 @@ exports.createEvent = async (req, res) => {
     }
 };
 
+
 exports.getEvents = async (req, res) => {
   try {
     const events = await Event.find({ userId: req.user._id });  
@@ -56,34 +59,31 @@ exports.getEvents = async (req, res) => {
 
 exports.updateEvent = async (req, res) => {
     const { id } = req.params;
-    const { LeaveType, start, end, description, managerId, status } = req.body;
-  
+    const { LeaveType, start, end, description, status } = req.body; 
+
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Invalid event ID' });
     }
-  
+
     try {
       const existingEvent = await Event.findById(id);
-  
+
       if (!existingEvent) {
         return res.status(404).json({ message: 'Event not found' });
       }
-  
-      // Check if the event is already approved or rejected
+
       if (existingEvent.status === 'approved' || existingEvent.status === 'rejected') {
         return res.status(400).json({ message: 'Cannot update an approved or rejected event' });
       }
-  
+
       if (status && !['pending', 'approved', 'rejected'].includes(status)) {
         return res.status(400).json({ message: 'Invalid status. Must be "pending", "approved", or "rejected".' });
       }
 
-      // Calculate the new number of leave days
       const startDate = start ? new Date(start) : existingEvent.start;
       const endDate = end ? new Date(end) : existingEvent.end;
       const newLeaveDays = Math.ceil((endDate - startDate) / (1000 * 3600 * 24)) + 1;
 
-      // Find the user and populate their leave balances
       const user = await User.findById(existingEvent.userId).populate('leaveBalances.leaveType');
 
       const leaveType = LeaveType || existingEvent.LeaveType;
@@ -102,16 +102,15 @@ exports.updateEvent = async (req, res) => {
         start: startDate,
         end: endDate,
         description,
-        managerId: managerId ? new ObjectId(managerId) : existingEvent.managerId,
-        status: status || 'pending' 
+        status: status || 'pending'
       };
-  
+
       const updatedEvent = await Event.findByIdAndUpdate(
         id,
         updateData,
         { new: true }
       );
-  
+
       res.json({
         message: 'Event updated successfully',
         event: updatedEvent
@@ -120,6 +119,7 @@ exports.updateEvent = async (req, res) => {
       res.status(400).json({ message: err.message });
     }
 };
+
 
 exports.deleteEvent = async (req, res) => {
   const { id } = req.params;
@@ -139,20 +139,24 @@ exports.deleteEvent = async (req, res) => {
 
 exports.getManagerMappedEmployeeLeaves = async (req, res) => {
     try {
-      // Check if the logged-in user is a manager
-      if (req.user.role !== 'manager') {
-        return res.status(403).json({ message: 'Access denied. Only managers can access this.' });
+      const employees = await User.find({ manager: req.user._id }).select('_id');
+  
+      const employeeIds = employees.map(emp => emp._id);
+  
+      if (employeeIds.length === 0) {
+        return res.status(404).json({ message: 'No employees mapped to you.' });
       }
-    
-      // Run the query to find events for the manager
-      const employeeLeaves = await Event.find({ managerId: req.user._id })
+
+      const employeeLeaves = await Event.find({ userId: { $in: employeeIds } })
         .populate('userId', 'fullName mobile');
-      
+  
       res.json(employeeLeaves);
     } catch (error) {
       res.status(500).json({ message: error.message });
     }
-};
+  };
+  
+  
 
 
 exports.approveRejectLeave = async (req, res) => {
@@ -200,7 +204,7 @@ exports.approveRejectLeave = async (req, res) => {
         res.json({ message: 'Leave request approved successfully', leave });
       } else if (action === 'reject') {
         leave.status = 'rejected';
-        await leave.save();
+        await Event.findByIdAndDelete(leaveId);
         res.json({ message: 'Leave request rejected successfully', leave });
       } else {
         res.status(400).json({ message: 'Invalid action' });

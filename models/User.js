@@ -5,7 +5,12 @@ const userSchema = new mongoose.Schema({
     mobile: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     token: { type: String }, 
-    role: { type: String, enum: ['employee', 'manager'], default: 'employee' },
+    role: { type: String, default: 'employee' },
+    manager: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',  
+        default: null
+      },
     leaveBalances: [{
         leaveType: {
           type: mongoose.Schema.Types.ObjectId,
