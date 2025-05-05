@@ -19,9 +19,7 @@ router.delete('/:id', ensureAuthenticated, userController.deleteUser);
 
 router.post('/search', ensureAuthenticated, userController.searchUsers);
 
-router.get('/managers', ensureAuthenticated, userController.getAllManagers);
-
-router.post('/leave-balances', ensureAuthenticated, userController.getUserLeaveBalancesByUserId);
+router.post('/leave_balances', ensureAuthenticated, userController.getUserLeaveBalancesByUserId);
 
 
 module.exports = router;

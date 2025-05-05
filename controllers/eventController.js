@@ -2,51 +2,52 @@ const Event = require('../models/Event');
 const { ObjectId } = require('mongoose').Types;
 const User = require('../models/User');
 const LeaveType = require('../models/LeaveType');
+const sendEmail = require('../config/mailer');
 
 
 exports.createEvent = async (req, res) => {
-    const { LeaveType, start, end, description } = req.body;  // No managerId here anymore
-    try {
-      const startDate = new Date(start);
-      const endDate = new Date(end);
-      const leaveDays = Math.ceil((endDate - startDate) / (1000 * 3600 * 24)) + 1;
+  const { LeaveType, start, end, description } = req.body;
+  try {
+    const user = await User.findById(req.user._id).populate('leaveBalances.leaveType manager');
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
-      // Find the user and populate their leave balances
-      const user = await User.findById(req.user._id).populate('leaveBalances.leaveType');
+    // Check leave type, user's balance
+    const leaveBalance = user.leaveBalances.find(balance => balance.leaveType.name === LeaveType);
+    if (!leaveBalance) return res.status(400).json({ message: `No leave balance found for ${LeaveType}` });
 
-      if (!user) {
-        return res.status(404).json({ message: 'User not found' });
-      }
+    const newEvent = new Event({
+      LeaveType,
+      start,
+      end,
+      description,
+      userId: req.user._id,
+      status: 'pending'
+    });
 
-      const leaveBalance = user.leaveBalances.find(balance => balance.leaveType.name === LeaveType);
+    const saved = await newEvent.save();
 
-      if (!leaveBalance) {
-        return res.status(400).json({ message: `No leave balance found for ${LeaveType}` });
-      }
+    // Email Notification
+    const manager = user.manager || user;
+    const subject = `New Leave Request from ${user.fullName}`;
+    const html = `
+      <p><strong>Employee:</strong> ${user.fullName}</p>
+      <p><strong>Leave Type:</strong> ${LeaveType}</p>
+      <p><strong>From:</strong> ${start}</p>
+      <p><strong>To:</strong> ${end}</p>
+      <p><strong>Description:</strong> ${description}</p>
+      <p>Status: <strong>PENDING</strong></p>
+    `;
 
-      if (leaveBalance.count < leaveDays) {
-        return res.status(400).json({ message: `Insufficient leave balance for ${LeaveType}. Available: ${leaveBalance.count}, Requested: ${leaveDays}` });
-      }
+    if (manager?.email) await sendEmail(manager.email, subject, html);
+    if (user?.email) await sendEmail(user.email, `Leave Request Submitted`, html);
 
-      const newEvent = new Event({
-        LeaveType,
-        start,
-        end,
-        description,
-        userId: req.user._id,
-        status: 'pending'
-      });
-  
-      const saved = await newEvent.save();
-      res.status(201).json({
-        message: 'Event created successfully',
-        event: saved
-      });
-    } catch (err) {
-      res.status(400).json({ message: err.message });
-    }
+    res.status(201).json({ message: 'Leave request created and emails sent', event: saved });
+
+  } catch (err) {
+    console.error('Create Event Error:', err);
+    res.status(400).json({ message: err.message });
+  }
 };
-
 
 exports.getEvents = async (req, res) => {
   try {
@@ -58,80 +59,73 @@ exports.getEvents = async (req, res) => {
 };
 
 exports.updateEvent = async (req, res) => {
-    const { id } = req.params;
-    const { LeaveType, start, end, description, status } = req.body; 
+  const { id } = req.params;
+  const { LeaveType, start, end, description, status } = req.body;
 
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ message: 'Invalid event ID' });
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).json({ message: 'Invalid event ID' });
+  }
+
+  try {
+    const existingEvent = await Event.findById(id);
+    if (!existingEvent) return res.status(404).json({ message: 'Event not found' });
+
+    if (existingEvent.status === 'approved' || existingEvent.status === 'rejected') {
+      return res.status(400).json({ message: 'Cannot update an approved or rejected event' });
     }
 
-    try {
-      const existingEvent = await Event.findById(id);
-
-      if (!existingEvent) {
-        return res.status(404).json({ message: 'Event not found' });
-      }
-
-      if (existingEvent.status === 'approved' || existingEvent.status === 'rejected') {
-        return res.status(400).json({ message: 'Cannot update an approved or rejected event' });
-      }
-
-      if (status && !['pending', 'approved', 'rejected'].includes(status)) {
-        return res.status(400).json({ message: 'Invalid status. Must be "pending", "approved", or "rejected".' });
-      }
-
-      const startDate = start ? new Date(start) : existingEvent.start;
-      const endDate = end ? new Date(end) : existingEvent.end;
-      const newLeaveDays = Math.ceil((endDate - startDate) / (1000 * 3600 * 24)) + 1;
-
-      const user = await User.findById(existingEvent.userId).populate('leaveBalances.leaveType');
-
-      const leaveType = LeaveType || existingEvent.LeaveType;
-      const leaveBalance = user.leaveBalances.find(balance => balance.leaveType.name === leaveType);
-
-      if (!leaveBalance) {
-        return res.status(400).json({ message: `No leave balance found for ${leaveType}` });
-      }
-
-      if (leaveBalance.count < newLeaveDays) {
-        return res.status(400).json({ message: `Insufficient leave balance for ${leaveType}. Available: ${leaveBalance.count}, Requested: ${newLeaveDays}` });
-      }
-
-      const updateData = {
-        LeaveType: leaveType,
-        start: startDate,
-        end: endDate,
-        description,
-        status: status || 'pending'
-      };
-
-      const updatedEvent = await Event.findByIdAndUpdate(
-        id,
-        updateData,
-        { new: true }
-      );
-
-      res.json({
-        message: 'Event updated successfully',
-        event: updatedEvent
-      });
-    } catch (err) {
-      res.status(400).json({ message: err.message });
+    if (status && !['pending', 'approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ message: 'Invalid status. Must be "pending", "approved", or "rejected"' });
     }
+
+    // Update fields
+    if (LeaveType) existingEvent.LeaveType = LeaveType;
+    if (start) existingEvent.start = new Date(start);
+    if (end) existingEvent.end = new Date(end);
+    if (description) existingEvent.description = description;
+    if (status) existingEvent.status = status;
+
+    const updatedEvent = await existingEvent.save();
+
+    // Email Notification
+    const user = await User.findById(existingEvent.userId);
+    const html = `
+      <p>Your leave request has been <strong>updated</strong>.</p>
+      <p><strong>Leave Type:</strong> ${existingEvent.LeaveType}</p>
+      <p><strong>From:</strong> ${existingEvent.start}</p>
+      <p><strong>To:</strong> ${existingEvent.end}</p>
+      <p><strong>Description:</strong> ${existingEvent.description}</p>
+      <p><strong>Status:</strong> ${existingEvent.status}</p>
+    `;
+
+    if (user?.email) await sendEmail(user.email, 'Leave Request Updated', html);
+
+    res.json({ message: 'Event updated.', event: updatedEvent });
+
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
 };
 
 
 exports.deleteEvent = async (req, res) => {
   const { id } = req.params;
   try {
-    const deletedEvent = await Event.findOneAndDelete({ _id: id, userId: req.user._id }); 
-    if (!deletedEvent) {
-      return res.status(404).json({ message: 'Event not found or you do not have permission to delete it' });
+    const event = await Event.findOneAndDelete({ _id: id, userId: req.user._id });
+    if (!event) return res.status(404).json({ message: 'Event not found or unauthorized' });
+
+    const user = await User.findById(req.user._id);
+
+    const html = `
+      <p>Your leave request for <strong>${event.LeaveType}</strong> from <strong>${event.start}</strong> to <strong>${event.end}</strong> has been <strong>deleted</strong>.</p>
+    `;
+
+    if (user?.email) {
+      await sendEmail(user.email, 'Leave Request Deleted', html);
     }
-    res.json({
-      message: 'Event deleted successfully',
-      event: deletedEvent
-    });
+
+    res.json({ message: 'Event deleted and email sent', event });
+
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
@@ -156,56 +150,65 @@ exports.getManagerMappedEmployeeLeaves = async (req, res) => {
     }
   };
   
-  
-
-
-exports.approveRejectLeave = async (req, res) => {
+  exports.approveRejectLeave = async (req, res) => {
     try {
       const { leaveId, action } = req.body;
   
       const leave = await Event.findById(leaveId);
-      if (!leave) {
-        return res.status(404).json({ message: 'Leave request not found' });
-      }
+      if (!leave) return res.status(404).json({ message: 'Leave not found' });
+  
+      const user = await User.findById(leave.userId).populate('leaveBalances.leaveType');
+      if (!user) return res.status(404).json({ message: 'User not found' });
+  
+      const startDate = new Date(leave.start);
+      const endDate = new Date(leave.end);
+      const leaveDays = Math.ceil((endDate - startDate) / (1000 * 3600 * 24)) + 1;
+  
+      const leaveType = await LeaveType.findOne({ name: leave.LeaveType });
+      if (!leaveType) return res.status(400).json({ message: 'Leave type not found' });
+  
+      const balance = user.leaveBalances.find(lb =>
+        lb.leaveType && lb.leaveType._id.toString() === leaveType._id.toString()
+      );
+  
+      if (!balance) return res.status(400).json({ message: 'Leave balance not found for this type' });
   
       if (action === 'approve') {
+        // Check balance at this point
+        if (balance.count < leaveDays) {
+          return res.status(400).json({ message: 'Insufficient leave balance for approval.' });
+        }
+  
+        // Deduct balance
+        balance.count -= leaveDays;
+        await user.save();
+  
         leave.status = 'approved';
         await leave.save();
   
-        const startDate = new Date(leave.start);
-        const endDate = new Date(leave.end);
-        const leaveDays = Math.ceil((endDate - startDate) / (1000 * 3600 * 24)) + 1;
+        const html = `
+          <p>Your leave request has been <strong>approved</strong>.</p>
+          <p><strong>Type:</strong> ${leave.LeaveType}</p>
+          <p><strong>From:</strong> ${leave.start}</p>
+          <p><strong>To:</strong> ${leave.end}</p>
+          <p><strong>Days:</strong> ${leaveDays}</p>
+        `;
+        await sendEmail(user.email, 'Leave Request Approved', html);
   
-        const leaveType = await LeaveType.findOne({ name: leave.LeaveType });
-        if (!leaveType) {
-          return res.status(404).json({ message: 'Leave type not found' });
-        }
+        res.json({ message: 'Leave approved, balance deducted, and email sent', leave });
   
-        const updatedUser = await User.findOneAndUpdate(
-          { 
-            _id: leave.userId, 
-            'leaveBalances.leaveType': leaveType._id 
-          },
-          { $inc: { 'leaveBalances.$.count': -leaveDays } },
-          { new: true }
-        );
-  
-        if (!updatedUser) {
-          const user = await User.findById(leave.userId);
-          const leaveBalanceIndex = user.leaveBalances.findIndex(
-            balance => balance.leaveType.toString() === leaveType._id.toString()
-          );
-          if (leaveBalanceIndex !== -1) {
-            user.leaveBalances[leaveBalanceIndex].count -= leaveDays;
-            await user.save();
-          }
-        }
-  
-        res.json({ message: 'Leave request approved successfully', leave });
       } else if (action === 'reject') {
-        leave.status = 'rejected';
         await Event.findByIdAndDelete(leaveId);
-        res.json({ message: 'Leave request rejected successfully', leave });
+  
+        // No balance to restore
+  
+        const html = `
+          <p>Your leave request for <strong>${leave.LeaveType}</strong> from <strong>${leave.start}</strong> to <strong>${leave.end}</strong> has been <strong>rejected</strong>.</p>
+        `;
+        await sendEmail(user.email, 'Leave Request Rejected', html);
+  
+        res.json({ message: 'Leave rejected and email sent', leave });
+  
       } else {
         res.status(400).json({ message: 'Invalid action' });
       }
@@ -213,4 +216,3 @@ exports.approveRejectLeave = async (req, res) => {
       res.status(500).json({ message: error.message });
     }
   };
-  

@@ -4,7 +4,7 @@ const User = require('../models/User');
 
 // Register Controller
 exports.register = async (req, res) => {
-  const { fullName, mobile, password } = req.body;
+  const { fullName, mobile, password, email } = req.body;
 
   try {
     // Check if mobile already exists
@@ -21,6 +21,7 @@ exports.register = async (req, res) => {
       fullName,
       mobile,
       password: hashedPassword,
+      email,
     });
 
     // Save user to database
@@ -68,6 +69,7 @@ exports.login = async (req, res) => {
            mobile: user.mobile,
            id: user._id,
            fullName: user.fullName,
+           email: user.email,
            token: token,
            role: user.role,
             message: 'LOGGED_IN_SUCCESSFULLY'

@@ -1,119 +1,116 @@
 const User = require('../models/User');
+const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const LeaveType = require('../models/LeaveType');
-const mongoose = require('mongoose');
 
 // Get all users
 exports.getAllUsers = async (req, res) => {
+    console.log('getAllUsers function executed');
     try {
-        const users = await User.find({}, '-password -token');
-        res.status(200).json(users);
+      const users = await User.find({}, '-password -token');
+      res.status(200).json(users);
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  };
+  // Get users with pagination
+exports.getPaginatedUsers = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        const total = await User.countDocuments();
+        const users = await User.find()
+            .skip(skip)
+            .limit(limit)
+            .select('-password -token')
+            .sort({ fullName: 1 });
+
+        res.status(200).json({
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit),
+            data: users
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
+
 // Create a new user
 exports.createUser = async (req, res) => {
-    const { fullName, mobile, password, role, manager } = req.body;
+    const { fullName, mobile, password, manager, email } = req.body;
     try {
-      if (!fullName || !mobile || !password) {
-        return res.status(400).json({ message: 'fullName, mobile, and password are required fields' });
-      }
-  
-      const hashedPassword = await bcrypt.hash(password, 10);
-  
-      const token = jwt.sign(
-        { mobile: mobile },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN }
-      );
-  
-      const newUser = new User({
-        fullName,
-        mobile,
-        password: hashedPassword,
-        role: role || 'employee',
-        token: token,
-        manager: manager || null
-      });
-  
-      const savedUser = await newUser.save();
-  
-      //  After saving user, fetch leave types
-      const leaveTypes = await LeaveType.find();
-  
-      //  Create leaveBalances for each leave type
-      const leaveBalances = leaveTypes.map(type => ({
-        leaveType: type._id,
-        count: type.count || 0 
-      }));
-  
-      //  Update user with leaveBalances
-      savedUser.leaveBalances = leaveBalances;
-      await savedUser.save(); 
-  
-      const { password: _, ...userResponse } = savedUser.toObject();
-      res.status(201).json(userResponse);
-  
-    } catch (error) {
-      res.status(400).json({ message: error.message });
-    }
-  };
-  
+        // Check if all required fields are present
+        if (!fullName || !mobile || !password || !manager || !email) {
+          return res.status(400).json({ message: 'fullName, mobile, password, manager, and email are required fields' });
+        }
 
+        if (!mongoose.Types.ObjectId.isValid(manager)) {
+          return res.status(400).json({ message: 'Invalid manager ID' });
+        }  
+        
+        // Check if a user with the given mobile already exists
+        const existingUser = await User.findOne({ mobile });
+        if (existingUser) {
+          return res.status(409).json({ message: 'Mobile number already exists. Please use a different one.' });
+        }
+
+        const existingEmail = await User.findOne({ email });
+        if (existingEmail) {
+          return res.status(409).json({ message: 'Email already exists. Please use a different one.' });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        
+        // Generate token
+        const token = jwt.sign(
+            { mobile: mobile },
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_EXPIRES_IN }
+        );
+
+        const newUser = new User({ 
+            fullName, 
+            mobile, 
+            password: hashedPassword, 
+            email,
+            manager,
+            token: token
+        });
+        const savedUser = await newUser.save();
+        console.log(savedUser);
+        
+        // Remove password from the response
+        const { password: _, ...userResponse } = savedUser.toObject();
+        res.status(201).json(userResponse);
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
 
 // Update a user
 exports.updateUser = async (req, res) => {
     const { id } = req.params;
-    const { fullName, mobile, manager } = req.body;
-  
+    const { fullName, mobile, email, manager } = req.body;
     try {
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ message: 'Invalid user ID' });
-      }
-  
-      const updateFields = { fullName, mobile };
-      if (manager !== undefined) {
-        if (manager === '' || manager === null) {
-          updateFields.manager = null;
-        } else if (mongoose.Types.ObjectId.isValid(manager)) {
-          updateFields.manager = manager;
-        } else {
-          return res.status(400).json({ message: 'Invalid manager ID' });
+        const updatedUser = await User.findByIdAndUpdate(
+            id,
+            { fullName, mobile, email, manager },
+            { new: true, runValidators: true }
+        ).select('-password -token');
+
+        if (!updatedUser) {
+            return res.status(404).json({ message: 'User not found' });
         }
-      }
-  
-      let user = await User.findByIdAndUpdate(
-        id,
-        updateFields,
-        { new: true, runValidators: true }
-      ).select('-password -token');
-  
-      if (!user) {
-        return res.status(404).json({ message: 'User not found' });
-      }
-  
-      // Check if leaveBalances field is missing
-      if (user.leaveBalances === undefined) {
-        const leaveTypes = await LeaveType.find();
-        const leaveBalances = leaveTypes.map(type => ({
-          leaveType: type._id,
-          count: type.count || 0  
-        }));
-  
-        user.leaveBalances = leaveBalances;
-        await user.save(); 
-      }
-  
-      res.status(200).json(user);
-  
+        res.status(200).json(updatedUser);
     } catch (error) {
-      console.error('Error updating user:', error);
-      res.status(400).json({ message: error.message });
+        res.status(400).json({ message: error.message });
     }
-  };
+};
 
 // Delete a user
 exports.deleteUser = async (req, res) => {
@@ -136,7 +133,7 @@ exports.searchUsers = async (req, res) => {
       const query = {
         $or: [
           { fullName: { $regex: search, $options: 'i' } },
-          { mobile: { $regex: search, $options: 'i' } }
+          { mobile: { $regex: search, $options: 'i' } },
         ]
       };
   
@@ -158,21 +155,8 @@ exports.searchUsers = async (req, res) => {
     }
   };
 
-// Get all manager users
-exports.getAllManagers = async (req, res) => {
-    try {
-        const managers = await User.find({ role: 'manager' }, '-password -token');
-        res.status(200).json({
-            managers,
-            count: managers.length
-        });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
-
 exports.getUserLeaveBalancesByUserId = async (req, res) => {
-    const { userId, leaveType } = req.body;  
+    const { userId, leaveType } = req.body;  // userId and leaveType from request body
     
     try {
         // Find the user by userId

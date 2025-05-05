@@ -3,6 +3,12 @@ config = process.env;
 const app = require('./config/express');
 require('./database/mongoose');
 
+// // test
+// const testRoutes = require('./routes/test');
+// app.use('/test', testRoutes);
+
+// Import cron job
+require('./cron/autoApproveLeaves');
 
 // module.parent check is required to support mocha watch
 if (!module.parent) {
